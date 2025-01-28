@@ -12,6 +12,29 @@
 
 using namespace std;
 
+void printVector(const std::vector<int>& vec) {
+    for (const int& val : vec) {
+        std::cout << val << " ";
+    }
+    std::cout << std::endl;
+}
+
+void printVector(const std::vector<double>& vec) {
+    for (const double& val : vec) {
+        std::cout << val << " ";
+    }
+    std::cout << std::endl;
+}
+
+void print2DVector(const std::vector<std::vector<int>>& vec) {
+    for (const auto& innerVec : vec) {
+        for (const int& val : innerVec) {
+            std::cout << val << " ";
+        }
+        std::cout << std::endl;
+    }
+}
+
 int main() {
     // Definiranje spremenljivk
     std::string mreza = "./primer4mreza.txt"; // Pot do datoteke z mrežo
@@ -182,6 +205,19 @@ int main() {
         std::getline(file, prazna_vrstica2); // Preberemo prazno vrstico
     }
 
+    // Izpis vseh vektorjev
+    std::cout << "Tipi robnih pogojev: ";
+    printVector(tipi_robnih_pogojev);
+
+    std::cout << "Vrednosti robnih pogojev: ";
+    printVector(vrednosti_robnih_pogojev);
+
+    std::cout << "Vrednosti prestopa toplote: ";
+    printVector(vrednosti_prestopa_toplote);
+
+    std::cout << "Vozlišèa robnih pogojev: " << std::endl;
+    print2DVector(vozlisca_robnih_pogojev);
+
     // Konec branja datoteke
 
     // Sledi blok kode, ki preveri sosednjost vozlišè in to zapiše v obliki vektorjev
@@ -248,6 +284,9 @@ int main() {
         }
         sosednja_vozlisca.push_back(node_i_neighbours); // Dodamo sosednja vozlišèa v vektor
     }
+
+    std::cout << "Vektor sosednjih vozlišè: " << std::endl;
+    print2DVector(sosednja_vozlisca);
 
     int n = n_vozlisc; // Število vozlišè
 
@@ -366,27 +405,33 @@ int main() {
     }
     fileIDb.close(); // Zapri datoteko
 
-    // Raèunanje sistema enaèb z Gauss-Seidlovo metodo
-    vector<double> T; // Vektor za shranjevanje rezultatov
-    for (int iiT = 0; iiT < n; iiT++) {
-        T.push_back(100); // Inicializiraj vse temperature na 100
-    }
+    // Inicializacija vektorja T za shranjevanje rezultatov
+    vector<double> T(n, 100); // Inicializiraj vse temperature na 100
+    vector<double> T_old = T; // Ustvari kopijo za preverjanje konvergence
 
-    int st_iter = 1000; // Število iteracij
+    double max_error = 1e-10; // Toleranca za preverjanje konvergence
+    double omega = 1.5; // Successive Over-Relaxation (SOR) parameter
+    bool converged = false; // Spremenljivka za spremljanje konvergence
+
+    int st_iter = 1000; // Najveèje število iteracij
 
     // Nastavitev števila niti
     omp_set_num_threads(16); // Nastavi število niti za delovanje
     omp_set_dynamic(1); // Omogoèi dinamièno dodeljevanje niti
 
-    std::vector<double> T_new = T; // Ustvari nov vektor T za shranjevanje posodobitev
-
     // Zaèetek merjenja èasa sistema enaèb
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Gauss-Seidl metoda
-    for (int iter = 0; iter < st_iter; iter++) {
+    // Gauss-Seidel metoda s SOR
+    for (int iter = 0; iter < st_iter && !converged; iter++) {
+        converged = true;
+
+    //Successive Over-Relaxation (SOR) je iterativna metoda za reševanje linearnih sistemov, 
+    //ki izboljša hitrost konvergence Gauss-Seidelove metode z uporabo relaksacijskega faktorja 
+    //omega, ki prilagaja posodobitve vrednosti, da se pospeši konvergenca in zmanjša število potrebnih iteracij
+
         // Rdeèi vozli (parni indeksi)
-#pragma omp parallel for shared(A, b, T, n)
+#pragma omp parallel for schedule(dynamic) shared(A, b, T, n) reduction(&&: converged)
         for (int jj = 0; jj < n; jj++) {
             if (jj % 2 == 0) { // Rdeèi vozli
                 double d = b[jj];
@@ -395,12 +440,17 @@ int main() {
                         d -= A[jj][ii] * T[ii]; // Izraèunaj novo vrednost
                     }
                 }
-                T[jj] = d / A[jj][jj]; // Posodobi temperaturo
+                double T_new = d / A[jj][jj]; // Izraèunaj novo temperaturo
+                double T_updated = omega * T_new + (1 - omega) * T[jj]; // Uporabi SOR
+                if (abs(T_updated - T_old[jj]) > max_error) {
+                    converged = false;
+                }
+                T[jj] = T_updated;
             }
         }
 
         // Èrni vozli (neparni indeksi)
-#pragma omp parallel for shared(A, b, T, n)
+#pragma omp parallel for schedule(dynamic) shared(A, b, T, n) reduction(&&: converged)
         for (int jj = 0; jj < n; jj++) {
             if (jj % 2 != 0) { // Èrni vozli
                 double d = b[jj];
@@ -409,14 +459,22 @@ int main() {
                         d -= A[jj][ii] * T[ii]; // Izraèunaj novo vrednost
                     }
                 }
-                T[jj] = d / A[jj][jj]; // Posodobi temperaturo
+                double T_new = d / A[jj][jj]; // Izraèunaj novo temperaturo
+                double T_updated = omega * T_new + (1 - omega) * T[jj]; // Uporabi SOR
+                if (abs(T_updated - T_old[jj]) > max_error) {
+                    converged = false;
+                }
+                T[jj] = T_updated;
             }
         }
+
+        // Posodobi stari vektor za naslednjo iteracijo
+        T_old = T;
     }
 
     // Konec merjenja èasa
     auto end_time = std::chrono::high_resolution_clock::now();
-
+    
     // Izpis trajanja
     std::chrono::duration<double> time_duration = end_time - start_time;
     std::cout << "Èas Gauss-Seidl metode: " << time_duration.count() << " sekund" << std::endl;
